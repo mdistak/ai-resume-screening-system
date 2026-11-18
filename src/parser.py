@@ -13,7 +13,7 @@ SUPPORTED_EXTENSIONS = (".pdf", ".docx")
 
 EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Candidate phone strings: digits with optional +, spaces, hyphens, brackets, dots
-PHONE_CANDIDATE_PATTERN = re.compile(r"\+?\d[\d\s\-().]{8,16}\d")
+PHONE_CANDIDATE_PATTERN = re.compile(r"\(?\+?\d[\d\s\-().]{8,16}\d")
 
 
 def extract_text_from_pdf(file) -> str:
