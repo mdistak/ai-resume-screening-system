@@ -26,7 +26,7 @@ def ensure_nltk_data():
 ensure_nltk_data()
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-URL_RE = re.compile(r"(https?://\S+|www\.\S+)")
+URL_RE = re.compile(r"(https?://\S+|www\.\S+|\b[a-z0-9-]+\.(?:com|org|io|in)\b\S*)")
 PHONE_RE = re.compile(r"\(?\+?\d[\d\s\-().]{8,16}\d")
 # Keeps C++, C#, Node.js, scikit-learn; first char must be a letter
 TOKEN_RE = re.compile(r"[a-z][a-z0-9+#.\-]*")
@@ -73,6 +73,8 @@ def tokenize(text: str) -> list:
     tokens = []
     for token in TOKEN_RE.findall(text):
         token = token.strip(".-")          # remove trailing sentence dots
+        if re.fullmatch(r"x{4,}", token):   # placeholder like xxxxxxxxxx
+             continue
         if len(token) >= 2 or token in ("c", "r"):   # keep C and R languages
             tokens.append(token)
     return tokens
