@@ -1,0 +1,15 @@
+Data Scientist (Fresher / 0-1 years)
+
+We are looking for a Data Scientist to build machine learning and NLP solutions.
+
+Required Skills:
+Python, Pandas, NumPy, Scikit-learn, SQL, NLP, Machine Learning, TF-IDF, Git
+
+Good to have:
+Streamlit, Matplotlib, Data Visualization
+
+Responsibilities:
+Clean and analyse data, build predictive models, create dashboards and
+present insights to stakeholders.
+
+Qualification: B.Tech in Computer Science or a related field.
