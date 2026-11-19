@@ -17,6 +17,9 @@ sys.path.append(str(ROOT))  # lets "from src..." work locally and on Streamlit C
 from src.matcher import rank_candidates
 from src.parser import parse_resume
 from src.skills import extract_jd_skills, get_all_skill_names
+from src.visualization import (candidate_labels, close_figure, comparison_chart,
+                               score_breakdown_chart, skill_heatmap, skill_matrix,
+                               text_vs_skill_chart)
 
 SAMPLE_JD_PATH = ROOT / "data" / "sample_jd" / "data_scientist_jd.txt"
 
@@ -137,7 +140,7 @@ if results:
         st.warning(f"{row['File']}: {row['Status']}")
 
     st.dataframe(
-        df[["Rank", "Candidate", "Text Similarity (%)", "Skill Match (%)",
+        df[["Rank", "Candidate", "File", "Text Similarity (%)", "Skill Match (%)",
             "Final Score (%)", "Matched Skills", "Missing Skills", "Email", "Phone"]],
         hide_index=True,
         column_config={
@@ -154,6 +157,51 @@ if results:
     st.download_button("Download CSV report", data=csv_bytes,
                        file_name=f"candidate_ranking_{datetime.now():%Y%m%d_%H%M%S}.csv",
                        mime="text/csv")
+
+    st.subheader("Visual analysis")
+    tab_breakdown, tab_heatmap, tab_scatter, tab_compare = st.tabs(
+        ["Score breakdown", "Skill heatmap", "Text vs skill", "Compare candidates"])
+
+    with tab_breakdown:
+        fig = score_breakdown_chart(df, results["text_pct"] / 100, results["skill_pct"] / 100)
+        st.pyplot(fig)
+        close_figure(fig)
+        st.caption("Each bar is the final score split into its two weighted parts. "
+                   "The top 15 candidates are shown.")
+
+    with tab_heatmap:
+        fig = skill_heatmap(df, results["required"])
+        if fig is None:
+            st.info("No required skills are selected, so there is nothing to show.")
+        else:
+            st.pyplot(fig)
+            close_figure(fig)
+            st.caption("Green = the resume contains the required skill, red = it is missing. "
+                       "The top 15 candidates are shown.")
+
+    with tab_scatter:
+        fig = text_vs_skill_chart(df)
+        st.pyplot(fig)
+        close_figure(fig)
+        st.caption("Read both scores together. A resume high on skill match but low on text "
+                   "similarity (top left) is worth a manual look, for example a long skill "
+                   "list with little description of actual work.")
+
+    with tab_compare:
+        options = candidate_labels(df)
+        picked = st.multiselect("Choose 2 to 4 candidates to compare", options=options,
+                                default=options[:min(3, len(options))], max_selections=4)
+        if len(picked) < 2:
+            st.info("Select at least two candidates.")
+        else:
+            subset = df[[label in picked for label in options]]
+            fig = comparison_chart(subset)
+            st.pyplot(fig)
+            close_figure(fig)
+            if results["required"]:
+                st.markdown("**Required skills side by side** (\u2713 matched, \u2717 missing)")
+                table = skill_matrix(subset, results["required"]).T
+                st.dataframe(table.apply(lambda col: col.map({1: "\u2713", 0: "\u2717"})))
 
     st.subheader("Candidate details")
     for _, row in df.iterrows():
