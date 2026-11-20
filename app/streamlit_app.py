@@ -5,6 +5,8 @@ Run from the project root:  streamlit run app/streamlit_app.py
 """
 import hashlib
 import io
+import os
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,8 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))  # lets "from src..." work locally and on Streamlit Cloud
 
+from src.database import (clear_history, delete_run, get_run_details, get_run_results,
+                          init_db, list_runs, save_analysis)
 from src.matcher import rank_candidates
 from src.parser import parse_resume
 from src.skills import extract_jd_skills, get_all_skill_names
@@ -22,6 +26,15 @@ from src.visualization import (candidate_labels, close_figure, comparison_chart,
                                text_vs_skill_chart)
 
 SAMPLE_JD_PATH = ROOT / "data" / "sample_jd" / "data_scientist_jd.txt"
+
+# History can be switched off with the environment variable RESUME_APP_HISTORY=0
+# (we will do this on the public deployment, where the database would be shared).
+HISTORY_ENABLED = os.environ.get("RESUME_APP_HISTORY", "1") == "1"
+if HISTORY_ENABLED:
+    try:
+        init_db()
+    except (OSError, sqlite3.Error):
+        HISTORY_ENABLED = False
 
 st.set_page_config(page_title="AI Resume Screening", page_icon="📄", layout="wide")
 
@@ -55,6 +68,52 @@ def current_signature(uploaded_files, jd_text, required_skills, text_pct):
     return (files, jd_hash, tuple(sorted(required_skills)), text_pct)
 
 
+def render_history():
+    """Shows saved analyses from the SQLite database."""
+    runs = list_runs()
+    if runs.empty:
+        st.info("No saved analyses yet. Tick 'Save this analysis to history' "
+                "in the sidebar before analysing.")
+        return
+
+    overview = runs.copy()
+    overview["Weights (text/skill)"] = [f"{round(t * 100)}/{round(s * 100)}"
+                                        for t, s in zip(runs["text_weight"], runs["skill_weight"])]
+    overview = overview.rename(columns={
+        "run_id": "Run", "created_at": "Date", "job_title": "Job",
+        "candidate_count": "Candidates", "top_candidate": "Top candidate",
+        "top_score": "Top score (%)"})
+    st.dataframe(overview[["Run", "Date", "Job", "Candidates", "Weights (text/skill)",
+                           "Top candidate", "Top score (%)"]], hide_index=True)
+
+    options = {f"Run #{row.run_id}  |  {row.created_at}  |  {row.job_title}": int(row.run_id)
+               for row in runs.itertuples()}
+    chosen = st.selectbox("Open a saved run", list(options))
+    run_id = options[chosen]
+    details = get_run_details(run_id)
+    if details is None:
+        return
+    saved = get_run_results(run_id)
+
+    st.caption(f"Weights: text {round(details['text_weight'] * 100)}% / "
+               f"skill {round(details['skill_weight'] * 100)}%  |  "
+               f"Required skills: {details['required_skills'] or 'none'}")
+    st.dataframe(saved, hide_index=True)
+    st.download_button("Download this run as CSV",
+                       data=saved.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"history_run_{run_id}.csv", mime="text/csv",
+                       key=f"download_run_{run_id}")
+
+    delete_col, clear_col = st.columns(2)
+    if delete_col.button("Delete this run"):
+        delete_run(run_id)
+        st.rerun()
+    confirm = clear_col.checkbox("I want to clear ALL saved history")
+    if clear_col.button("Clear all history", disabled=not confirm):
+        clear_history()
+        st.rerun()
+
+
 # ------------------------------------------------------------------ header
 st.title("AI-Based Resume Screening and Candidate Ranking System")
 st.caption("NLP + Machine Learning (TF-IDF and Cosine Similarity). "
@@ -71,7 +130,14 @@ with st.sidebar:
     st.divider()
     st.button("Load sample job description", on_click=load_sample_jd)
     st.divider()
-    st.caption("Resumes are processed in memory and are not stored.")
+    save_history = False
+    if HISTORY_ENABLED:
+        save_history = st.checkbox(
+            "Save this analysis to history", value=False,
+            help="Stores scores, skills and candidate names in a local SQLite file. "
+                 "Resume text, emails and phone numbers are NOT stored.")
+    st.caption("Resume files are processed in memory and never stored. "
+               "Saved history keeps scores and skills only.")
 
 # ------------------------------------------------------------------ inputs
 st.subheader("1. Upload resumes")
@@ -114,6 +180,10 @@ if st.button("Analyze candidates", type="primary"):
             "time": datetime.now().strftime("%d %b %Y, %H:%M:%S"),
             "signature": current_signature(uploaded_files, jd_text, required_skills, text_pct),
         }
+        if save_history:
+            saved_run_id = save_analysis(ranked, jd_text, text_pct / 100, skill_pct / 100,
+                                         required_skills)
+            st.success(f"Analysis saved to history as run #{saved_run_id}.")
 
 # ------------------------------------------------------------------ results
 results = st.session_state.get("results")
@@ -214,6 +284,12 @@ if results:
             st.markdown(f"**Missing skills:** :red[{row['Missing Skills'] or '-'}]")
             st.markdown(f"**All skills found:** {row['Skills Found'] or '-'}")
             st.caption(f"Email: {row['Email']}  |  Phone: {row['Phone']}  |  File: {row['File']}")
+
+# ------------------------------------------------------------------ history
+if HISTORY_ENABLED:
+    st.divider()
+    with st.expander("Analysis history (saved runs)"):
+        render_history()
 
 st.divider()
 st.caption("Scores are similarity indicators to support a recruiter. "

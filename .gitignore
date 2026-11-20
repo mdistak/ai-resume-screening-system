@@ -6,3 +6,5 @@ __pycache__/
 data/private_resumes/
 reports/*.csv
 .DS_Store
+*.db
+*.sqlite3
