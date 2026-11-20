@@ -89,3 +89,51 @@ def group_by_category(skills: list) -> dict:
     for skill in skills:
         grouped.setdefault(db[skill]["category"], []).append(skill)
     return grouped
+
+
+
+# ---------------------------------------------------------------------------
+# Skill evidence: are the skills only LISTED, or also DESCRIBED in the text?
+# These thresholds are design choices tested on synthetic samples only.
+# ---------------------------------------------------------------------------
+LIST_LINE_MIN_SKILLS = 3     # a skill list line has at least this many skills
+FLAG_MIN_SKILLS = 8          # flag only resumes with many detected skills ...
+FLAG_MAX_EVIDENCE = 0.20     # ... when fewer than 20% of them are described in text
+
+
+def skill_evidence(text: str) -> dict:
+    """
+    A line counts as a bare skill LIST when it has at least LIST_LINE_MIN_SKILLS
+    skills and no more filler words than skills. Every other line with skills is
+    DESCRIPTIVE text (sentences about work that was done).
+    """
+    patterns = _patterns()
+    described, listed = set(), set()
+    for line in text.splitlines():
+        cleaned = clean_text(line)
+        found = [skill for skill, rx in patterns.items() if rx.search(cleaned)]
+        if not found:
+            continue
+        remaining = cleaned
+        for skill in found:
+            remaining = patterns[skill].sub(" ", remaining)
+        filler_words = len(re.findall(r"[a-z]{2,}", remaining))
+        if len(found) >= LIST_LINE_MIN_SKILLS and filler_words <= len(found):
+            listed.update(found)
+        else:
+            described.update(found)
+
+    found_all = sorted(listed | described, key=str.lower)
+    ratio = len(described) / len(found_all) if found_all else 1.0
+    return {"found": found_all,
+            "described": sorted(described, key=str.lower),
+            "listed_only": sorted(listed - described, key=str.lower),
+            "evidence_ratio": ratio}
+
+
+def review_note(evidence: dict) -> str:
+    """Text for the 'Review Note' column ('' when there is nothing to flag)."""
+    if len(evidence["found"]) >= FLAG_MIN_SKILLS and evidence["evidence_ratio"] < FLAG_MAX_EVIDENCE:
+        return (f"{len(evidence['listed_only'])} of {len(evidence['found'])} detected skills "
+                "appear only in a skill list, not in descriptive text. Manual review suggested.")
+    return ""

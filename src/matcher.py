@@ -1,6 +1,6 @@
 """
 matcher.py
-TF-IDF + Cosine Similarity matching engine, combined scoring and ranking.
+TF-IDF + Cosine Similarity matching engine, combined scoring, ranking and explanation.
 
 Final Score = w_text x Text Similarity (%) + w_skill x Skill Match (%)
 Default weights 0.70 / 0.30 are an initial design choice, not a universal rule.
@@ -11,14 +11,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from src.preprocessing import preprocess_text
-from src.skills import compare_skills, extract_jd_skills, extract_skills
+from src.skills import (compare_skills, extract_jd_skills, extract_skills,
+                        review_note, skill_evidence)
 
 DEFAULT_TEXT_WEIGHT = 0.70
 DEFAULT_SKILL_WEIGHT = 0.30
 
 RESULT_COLUMNS = ["Rank", "Candidate", "File", "Email", "Phone",
                   "Text Similarity (%)", "Skill Match (%)", "Final Score (%)",
-                  "Matched Skills", "Missing Skills", "Skills Found", "Status"]
+                  "Matched Skills", "Missing Skills", "Skills Found",
+                  "Skill Evidence (%)", "Review Note", "Status"]
 
 
 def build_vectorizer(ngram_range=(1, 2)):
@@ -58,6 +60,39 @@ def compute_text_similarity(jd_processed: str, resumes_processed: list,
     return np.clip(scores, 0.0, 1.0)
 
 
+def explain_text_similarity(jd_text: str, resumes: list, top_n=8, ngram_range=(1, 2)) -> list:
+    """
+    For every resume, list the terms that create its text similarity.
+    TF-IDF rows are L2-normalised, so cosine similarity = sum over terms of
+    (JD weight x resume weight). Each term's share is therefore exact, and all
+    shares together add up to the Text Similarity (%) shown in the results.
+    Returns one list of (term, percentage_points) per resume, in the input order.
+    top_n=None returns every term.
+    """
+    jd_processed = preprocess_text(jd_text)
+    processed = [preprocess_text(r["text"]) for r in resumes]
+    nothing = [[] for _ in resumes]
+    if not jd_processed.strip() or not any(d.strip() for d in processed):
+        return nothing
+
+    vectorizer = build_vectorizer(ngram_range)
+    try:
+        matrix = vectorizer.fit_transform([jd_processed] + processed)
+    except ValueError:
+        return nothing
+
+    terms = vectorizer.get_feature_names_out()
+    jd_row = matrix[0].toarray().ravel()
+    explanations = []
+    for i in range(1, matrix.shape[0]):
+        contribution = jd_row * matrix[i].toarray().ravel() * 100
+        order = [j for j in np.argsort(contribution)[::-1] if contribution[j] > 0]
+        if top_n:
+            order = order[:top_n]
+        explanations.append([(str(terms[j]), float(contribution[j])) for j in order])
+    return explanations
+
+
 def _validate_weights(text_weight: float, skill_weight: float):
     if text_weight < 0 or skill_weight < 0 or abs(text_weight + skill_weight - 1) > 1e-9:
         raise ValueError("Weights must be non-negative and add up to 1.0")
@@ -94,6 +129,7 @@ def rank_candidates(resumes: list, jd_text: str, required_skills: list = None,
     for resume, text_score in zip(resumes, text_scores):
         skills_found = extract_skills(resume["text"])
         skill_result = compare_skills(skills_found, required_skills)
+        evidence = skill_evidence(resume["text"])
         text_percent = round(float(text_score) * 100, 2)
         skill_percent = skill_result["match_percent"]
 
@@ -113,6 +149,8 @@ def rank_candidates(resumes: list, jd_text: str, required_skills: list = None,
             "Matched Skills": ", ".join(skill_result["matched"]),
             "Missing Skills": ", ".join(skill_result["missing"]),
             "Skills Found": ", ".join(skills_found),
+            "Skill Evidence (%)": round(evidence["evidence_ratio"] * 100, 1),
+            "Review Note": review_note(evidence),
             "Status": resume["status"],
         })
 

@@ -16,9 +16,10 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))  # lets "from src..." work locally and on Streamlit Cloud
 
+from src.anonymize import anonymize_resumes, reveal_identities
 from src.database import (clear_history, delete_run, get_run_details, get_run_results,
                           init_db, list_runs, save_analysis)
-from src.matcher import rank_candidates
+from src.matcher import explain_text_similarity, rank_candidates
 from src.parser import parse_resume
 from src.skills import extract_jd_skills, get_all_skill_names
 from src.visualization import (candidate_labels, close_figure, comparison_chart,
@@ -26,6 +27,8 @@ from src.visualization import (candidate_labels, close_figure, comparison_chart,
                                text_vs_skill_chart)
 
 SAMPLE_JD_PATH = ROOT / "data" / "sample_jd" / "data_scientist_jd.txt"
+MAX_FILES = 50          # resumes per analysis
+MAX_FILE_MB = 5         # size limit per resume
 
 # History can be switched off with the environment variable RESUME_APP_HISTORY=0
 # (we will do this on the public deployment, where the database would be shared).
@@ -54,18 +57,23 @@ def parse_uploads(uploaded_files):
         if seen[name] > 1:
             stem, _, extension = name.rpartition(".")
             name = f"{stem} ({seen[uploaded.name]}).{extension}"
-        resumes.append(parse_resume(io.BytesIO(uploaded.getvalue()), filename=name))
+
+        if uploaded.size > MAX_FILE_MB * 1024 * 1024:
+            resumes.append({"filename": name, "name": "", "email": "", "phone": "", "text": "",
+                            "status": f"Error: file is larger than {MAX_FILE_MB} MB and was skipped"})
+        else:
+            resumes.append(parse_resume(io.BytesIO(uploaded.getvalue()), filename=name))
         progress.progress(index / len(uploaded_files),
                           text=f"Reading {name} ({index}/{len(uploaded_files)})")
     progress.empty()
     return resumes
 
 
-def current_signature(uploaded_files, jd_text, required_skills, text_pct):
+def current_signature(uploaded_files, jd_text, required_skills, text_pct, blind_mode):
     """A fingerprint of the inputs, used to detect stale results."""
     files = tuple((f.name, f.size) for f in uploaded_files or [])
     jd_hash = hashlib.md5(jd_text.encode("utf-8")).hexdigest()
-    return (files, jd_hash, tuple(sorted(required_skills)), text_pct)
+    return (files, jd_hash, tuple(sorted(required_skills)), text_pct, blind_mode)
 
 
 def render_history():
@@ -128,6 +136,11 @@ with st.sidebar:
     st.caption("Final Score = text weight x Text Similarity + skill weight x Skill Match. "
                "The default 70/30 is an initial design choice, not a universal rule.")
     st.divider()
+    blind_mode = st.checkbox(
+        "Blind screening", value=False,
+        help="Hides names, emails, phone numbers and file names, and removes them from the "
+             "text before scoring. You can reveal identities after reviewing the scores. "
+             "Other details such as college or city are not removed.")
     st.button("Load sample job description", on_click=load_sample_jd)
     st.divider()
     save_history = False
@@ -135,14 +148,16 @@ with st.sidebar:
         save_history = st.checkbox(
             "Save this analysis to history", value=False,
             help="Stores scores, skills and candidate names in a local SQLite file. "
-                 "Resume text, emails and phone numbers are NOT stored.")
+                 "Resume text, emails and phone numbers are NOT stored. In blind mode the "
+                 "saved names are anonymous; after revealing you can save a named copy.")
     st.caption("Resume files are processed in memory and never stored. "
                "Saved history keeps scores and skills only.")
 
 # ------------------------------------------------------------------ inputs
 st.subheader("1. Upload resumes")
-uploaded_files = st.file_uploader("PDF or DOCX files (you can select many)",
-                                  type=["pdf", "docx"], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    f"PDF or DOCX files (up to {MAX_FILES} files, {MAX_FILE_MB} MB each)",
+    type=["pdf", "docx"], accept_multiple_files=True)
 
 st.subheader("2. Job description")
 jd_text = st.text_area("Paste the job description here", key="jd_text", height=220)
@@ -165,20 +180,30 @@ if jd_text.strip() and not required_skills:
 if st.button("Analyze candidates", type="primary"):
     if not uploaded_files:
         st.error("Please upload at least one resume.")
+    elif len(uploaded_files) > MAX_FILES:
+        st.error(f"Please upload at most {MAX_FILES} resumes at a time.")
     elif not jd_text.strip():
         st.error("Please enter a job description.")
     else:
         resumes = parse_uploads(uploaded_files)
+        identity_map = None
+        if blind_mode:
+            resumes, identity_map = anonymize_resumes(resumes)
         with st.spinner("Calculating TF-IDF and cosine similarity..."):
             ranked = rank_candidates(resumes, jd_text, required_skills,
                                      text_pct / 100, skill_pct / 100)
+            explanations = explain_text_similarity(jd_text, resumes)
         st.session_state["results"] = {
             "df": ranked,
+            "jd_text": jd_text,
+            "explain": {r["filename"]: terms for r, terms in zip(resumes, explanations)},
+            "identity_map": identity_map,
             "required": list(required_skills),
             "text_pct": text_pct,
             "skill_pct": skill_pct,
             "time": datetime.now().strftime("%d %b %Y, %H:%M:%S"),
-            "signature": current_signature(uploaded_files, jd_text, required_skills, text_pct),
+            "signature": current_signature(uploaded_files, jd_text, required_skills,
+                                           text_pct, blind_mode),
         }
         if save_history:
             saved_run_id = save_analysis(ranked, jd_text, text_pct / 100, skill_pct / 100,
@@ -189,16 +214,34 @@ if st.button("Analyze candidates", type="primary"):
 results = st.session_state.get("results")
 if results:
     df = results["df"]
+    explain_lookup = results["explain"]
+
     st.divider()
     st.header("Ranking results")
 
-    if results["signature"] != current_signature(uploaded_files, jd_text, required_skills, text_pct):
+    if results["signature"] != current_signature(uploaded_files, jd_text, required_skills,
+                                                 text_pct, blind_mode):
         st.info("Inputs or settings changed since the last analysis. "
                 "Click 'Analyze candidates' to update the results.")
 
     st.caption(f"Weights: text {results['text_pct']}% / skill {results['skill_pct']}%  |  "
                f"Required skills ({len(results['required'])}): "
                f"{', '.join(results['required']) or 'none'}  |  Generated: {results['time']}")
+
+    if results["identity_map"]:
+        if st.checkbox("Reveal candidate identities (best done after reviewing the scores)"):
+            df = reveal_identities(df, results["identity_map"])
+            explain_lookup = {results["identity_map"][key]["file"]: terms
+                              for key, terms in explain_lookup.items()}
+            if HISTORY_ENABLED and st.button("Save these revealed results to history"):
+                revealed_run_id = save_analysis(df, results["jd_text"],
+                                                results["text_pct"] / 100,
+                                                results["skill_pct"] / 100,
+                                                results["required"])
+                st.success(f"Revealed results saved to history as run #{revealed_run_id}.")
+        else:
+            st.info("Blind screening is ON: names, emails, phone numbers and file names are "
+                    "hidden, and were removed from the text before scoring.")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Candidates analysed", len(df))
@@ -209,9 +252,15 @@ if results:
     for _, row in df[df["Status"] != "OK"].iterrows():
         st.warning(f"{row['File']}: {row['Status']}")
 
+    flagged = df[df["Review Note"] != ""]
+    if len(flagged):
+        st.warning(f"{len(flagged)} candidate(s) flagged for manual review "
+                   "(see the Review Note column). The scores themselves are not changed.")
+
     st.dataframe(
         df[["Rank", "Candidate", "File", "Text Similarity (%)", "Skill Match (%)",
-            "Final Score (%)", "Matched Skills", "Missing Skills", "Email", "Phone"]],
+            "Final Score (%)", "Review Note", "Matched Skills", "Missing Skills",
+            "Email", "Phone"]],
         hide_index=True,
         column_config={
             "Text Similarity (%)": st.column_config.ProgressColumn(
@@ -280,9 +329,20 @@ if results:
             c1.metric("Final score", f"{row['Final Score (%)']}%")
             c2.metric("Text similarity", f"{row['Text Similarity (%)']}%")
             c3.metric("Skill match", f"{row['Skill Match (%)']}%")
+            if row["Review Note"]:
+                st.warning(row["Review Note"])
             st.markdown(f"**Matched skills:** :green[{row['Matched Skills'] or '-'}]")
             st.markdown(f"**Missing skills:** :red[{row['Missing Skills'] or '-'}]")
             st.markdown(f"**All skills found:** {row['Skills Found'] or '-'}")
+            st.caption(f"Skill evidence: {row['Skill Evidence (%)']}% of the detected skills "
+                       "also appear in descriptive text, not only in a skill list.")
+            terms = explain_lookup.get(row["File"], [])
+            if terms:
+                st.markdown("**Why this text similarity?** Top terms, in percentage points of the score:")
+                st.write(", ".join(f"{term} (+{points:.2f})" for term, points in terms))
+                st.caption("Words and two-word phrases are counted separately, so a phrase and its "
+                           "own words can both appear. All shared terms together add up to the "
+                           "text similarity.")
             st.caption(f"Email: {row['Email']}  |  Phone: {row['Phone']}  |  File: {row['File']}")
 
 # ------------------------------------------------------------------ history
