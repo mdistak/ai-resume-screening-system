@@ -6,9 +6,9 @@
 
 **Source code:** https://github.com/mdistak/ai-resume-screening-system
 
-**Live app:** _link will be added after deployment_
+**Live app:** https://ai-resume-screening-system-ia.streamlit.app/
 
-[![Dashboard](screenshots/dashboard_results.png)](https://github.com/mdistak/ai-resume-screening-system)
+[![Dashboard](screenshots/dashboard_results.png)](https://ai-resume-screening-system-ia.streamlit.app/)
 
 ## Features
 
