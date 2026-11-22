@@ -1,4 +1,4 @@
-Test run: 2026-11-20 18:18:29
+Test run: 2026-11-22 10:09:00
 Python: 3.12.3
 
 ======================================================================
@@ -556,7 +556,7 @@ test_end_to_end.py -> PASS
 [PASS] PDF without text -> not reported as OK
 [PASS] unsupported type -> error status
 [PASS] Hindi text does not crash and English skills are still found
-[info] very long resume (19800 words) parsed and ranked in 6.9 s
+[info] very long resume (19800 words) parsed and ranked in 9.2 s
 [PASS] very long resume finishes in under 30 s
 
 === TEST 2: Normal pipeline on the sample resumes ===
@@ -582,6 +582,6 @@ test_end_to_end.py -> PASS
 [PASS] reveal restores real file names
 
 === TEST 5: 60 resumes at once ===
-[info] 60 resumes ranked in 0.2 s
+[info] 60 resumes ranked in 0.3 s
 [PASS] 60 resumes ranked in under 60 s
 
