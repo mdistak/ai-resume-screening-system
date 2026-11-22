@@ -4,9 +4,11 @@
 
 > **Decision-support tool.** It helps a recruiter shortlist candidates. It does not hire or reject anyone automatically, and the final decision always stays with a human.
 
+**Source code:** https://github.com/mdistak/ai-resume-screening-system
+
 **Live app:** _link will be added after deployment_
 
-![Dashboard](screenshots/dashboard_results.png)
+[![Dashboard](screenshots/dashboard_results.png)](https://github.com/mdistak/ai-resume-screening-system)
 
 ## Features
 
